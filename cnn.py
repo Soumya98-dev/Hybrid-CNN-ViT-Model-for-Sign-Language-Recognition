@@ -1,10 +1,10 @@
 import torchvision.models as tvm
 import torch, os
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Subset
+import random
 
 from vit import ViTForClassfication as ViT
-
 
 #from torch.utils.tensorboard.writer import SummaryWriter
 
@@ -25,7 +25,6 @@ config = {
 }
 
 
-
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -34,18 +33,24 @@ transform = transforms.Compose([
 
 fullData = datasets.ImageFolder(root="../hagrid-sample-500k-384p/hagrid_500k", transform=transform)
 
-trainS = int(.05 * len(fullData)) #
-valS = int(.02 * len(fullData)) #
+# ## Create Smaller dataset
+
+indices = random.sample(range(len(fullData)), 500)
+
+# Create a subset
+fullData = Subset(fullData, indices)
+
+# ##
+
+trainS = int(.8 * len(fullData)) #
+valS = int(.1 * len(fullData)) #
 testS = len(fullData) - trainS - valS
 
 trainData, valData, testData = random_split(fullData, [trainS, valS, testS])
 
-
 trainLoader = DataLoader(trainData, batch_size = 4, shuffle = True)
-
 valLoader = DataLoader(valData, batch_size = 4, shuffle= True)
 testLoader = DataLoader(testData, batch_size = 4)
-
 
 
 class CNNViT(torch.nn.Module):
@@ -72,7 +77,6 @@ class CNNViT(torch.nn.Module):
         self.vitProj = torch.nn.Linear(in_features = 2048, out_features = 768)
 
 
-
     def forward(self, x):
         # Get Features from cnn
         # Initial shape: 128, 3, 224, 224
@@ -93,21 +97,19 @@ class CNNViT(torch.nn.Module):
         return x[0]
 
 
-
-
-
-
 model = CNNViT()
 
 checkpointPath = "ckpt"
 os.makedirs(checkpointPath, exist_ok= True)
+
 lossFN = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=.0001) #.0001, .001, .3
+
 device = torch.device("cuda")
+
 model.to(device)
 model.vit.to(device)
 model.cnn.to(device)
-
 
 epochs = 5
 print("training")
@@ -129,7 +131,6 @@ for epoch in range(epochs):
     print(f"Epoch {epoch + 1}, Loss: {loss.item():.5f}")
 
 #torch.save(model.state_dict(), f"{checkpointPath}/.pth")
-
 
 model.eval()
 model.cnn.eval()
