@@ -176,7 +176,7 @@ def train_model(model, lossFN, optimizer, num_epochs=10):
     since = time.time()
 
     print("-" * 10)
-    
+
     for epoch in range(num_epochs):
         
         # for phase in ["train", "val"]:
@@ -217,7 +217,7 @@ def train_model(model, lossFN, optimizer, num_epochs=10):
 
     return model
 
-
+# Testing function
 def test_model(model, testLoader):
     model.eval()  # Set model to evaluation mode
     correct = 0
@@ -237,8 +237,10 @@ def test_model(model, testLoader):
 
 
 ## Run the Models
+print("CNN ResNet Only Model")
 CNN_only = train_model(model_RsN, lossFN, optimizer, num_epochs=10)
 test_model(model_RsN, testLoader)
 
+print("Fusion CNN-ViT Model")
 Fusion = train_model(model, lossFN, optimizer, num_epochs=10)
 test_model(model, testLoader)
