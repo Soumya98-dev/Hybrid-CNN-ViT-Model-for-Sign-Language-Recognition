@@ -40,10 +40,11 @@ transform = transforms.Compose([
 
 fullData = datasets.ImageFolder(root="../hagrid-sample-500k-384p/hagrid_500k", transform=transform)
 class_names = fullData.classes # number of classes in the dataset
+class_names = [name[10:].capitalize() for name in class_names] # Reformat class names and captilize for HAGrid dataset
 
 # ## Create Smaller dataset
 
-samples = 500 # Update the number of images to use in the dataset
+samples = 200 # Update the number of images to use in the dataset
 indices = random.sample(range(len(fullData)), samples) 
 
 # Create a subset
@@ -113,8 +114,8 @@ class CNNViT(torch.nn.Module):
 model = CNNViT()
 
 ## Option to load existing model. Comment out as needed
-state_dict = torch.load("./ckpt/cnnvit2.pth") # Update file name 
-model.load_state_dict(state_dict)
+# state_dict = torch.load("./ckpt/cnnvit2.pth") # Update file name 
+# model.load_state_dict(state_dict)
 
 device = torch.device("cuda")
 
@@ -226,7 +227,7 @@ def train_model(model, m_name, lossFN, optimizer, num_epochs=10):
 
     plt.suptitle(f"{m_name}", fontsize=12)
 
-    plt.savefig(f"{m_name}_TrainingPlot")
+    plt.savefig(f"./{checkpointPath}/{m_name}_{samples}samples_TrainingPlot")
     plt.close()
 
     return train_loss, train_acc
@@ -266,7 +267,7 @@ def test_model(model, testLoader,m_name):
     plt.ylabel('True Label')
     plt.title(f'Confusion Matrix - Test Accuracy {accuracy}%')
     plt.tight_layout()
-    plt.savefig(f"{m_name}_confusion_matrix.png")
+    plt.savefig(f"./{checkpointPath}/{m_name}_{samples}samples_confusion_matrix.png")
     plt.close()
 
 
@@ -277,7 +278,7 @@ Run the Models
 
 Models = {
     "CNN_only": model_RsN,
-    "Fusion_CNN-ViT": model,
+    # "Fusion_CNN-ViT": model,
     # "ViT_only": model_vit,
     "Pretrained_ViT": model_pyT_vit
 }
@@ -299,7 +300,7 @@ for name in model_names:
     print(f"Sample size: {samples}")
     optimizer = torch.optim.Adam(Models[name].parameters(), lr=.0001) #.0001, .001, .3
     train_loss, train_acc = train_model(Models[name], name, lossFN, optimizer, num_epochs=5)
-    torch.save(Models[name].state_dict(), f"{checkpointPath}/{name}.pth")
+    torch.save(Models[name].state_dict(), f"{checkpointPath}/{name}_{samples}samples.pth")
 
     test_model(Models[name], testLoader, name)
     print("\n----------")
