@@ -112,6 +112,9 @@ class CNNViT(torch.nn.Module):
 
 model = CNNViT()
 
+## Option to load existing model. Comment out as needed
+state_dict = torch.load("./ckpt/cnnvit2.pth") # Update file name 
+model.load_state_dict(state_dict)
 
 device = torch.device("cuda")
 
