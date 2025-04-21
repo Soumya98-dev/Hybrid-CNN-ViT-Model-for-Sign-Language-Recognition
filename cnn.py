@@ -1,6 +1,6 @@
 import torchvision.models as tvm
 import torch, os
-from torchvision import datasets, transforms, models
+from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split, Subset
 import random
 import time
@@ -9,6 +9,7 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import numpy as np
 from vit import ViTForClassfication as ViT
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 #from torch.utils.tensorboard.writer import SummaryWriter
 
@@ -36,15 +37,25 @@ transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
+    # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-fullData = datasets.ImageFolder(root="../hagrid-sample-500k-384p/hagrid_500k", transform=transform)
+
+#Pretrained ViT model weights and transforms
+weights_ViT = tvm.ViT_B_32_Weights.IMAGENET1K_V1
+weights_transform = weights_ViT.transforms()
+
+#Pretrained CNN ResNet model weights
+weights_RsN = tvm.ResNet50_Weights.IMAGENET1K_V1
+
+
+fullData = datasets.ImageFolder(root="../hagrid-sample-500k-384p/hagrid_500k", transform=transform) # Change tranform to either custom transform or pretrained model
+# fullData = datasets.ImageFolder(root="../hagrid-sample-500k-384p/hand_crops_json_processed", transform=transform) # Change tranform to either custom transform or pretrained model
 class_names = fullData.classes # number of classes in the dataset
 class_names = [name[10:].capitalize() for name in class_names] # Reformat class names and captilize for HAGrid dataset
 
 # ## Create Smaller dataset
-
-samples = 200 # Update the number of images to use in the dataset
+samples = 15000 # Update the number of images to use in the dataset
 indices = random.sample(range(len(fullData)), samples) 
 
 # Create a subset
@@ -127,8 +138,9 @@ model.cnn.to(device)
 '''
 Standalone CNN ResNet Model
 '''
+
 # Load pretrained ResNet50
-model_RsN = tvm.resnet50(weights=tvm.ResNet50_Weights.IMAGENET1K_V1)
+model_RsN = tvm.resnet50(weights=weights_RsN)
 
 # # Freeze all the pretrained layers
 # for param in model_RsN.parameters():
@@ -143,19 +155,39 @@ model_RsN = model_RsN.to(device)
 # for param in model_RsN.fc.parameters():
 #     param.requires_grad = True
 
+
 '''
 Standalone ViT Model
 '''
 
 ## ViT Only Model
-model_vit = ViT(config)
-model_vit = model_vit.to(device)
+# model_vit = ViT(config)
+# model_vit = model_vit.to(device)
 
 
 # Pre-trained Pytorch ViT
-model_pyT_vit = models.vit_b_16(weights=models.ViT_B_16_Weights.IMAGENET1K_V1)
-model_pyT_vit.heads.head = torch.nn.Linear(model_pyT_vit.heads.head.in_features, 18)  
-model_pyT_vit.to(device)
+model_pyT_vit = tvm.vit_b_32(weights=weights_ViT)
+
+
+for params in model_pyT_vit.parameters():
+    params.requires_grad=False
+
+# UNFREEZE last encoder blocks
+# ViT encoder blocks are in model.encoder.layers
+LayerTrStart = 6
+LayerTrEnd = 12
+for i in range(LayerTrStart, LayerTrEnd):  # Last 3 blocks (index 9, 10, 11)
+    for param in model_pyT_vit.encoder.layers[i].parameters():
+        param.requires_grad = True
+
+
+#Changing Last Layer
+model_pyT_vit.heads.head = torch.nn.Linear(model_pyT_vit.heads.head.in_features, len(class_names))
+
+for param in model_pyT_vit.heads.parameters():
+    param.requires_grad = True
+
+model_pyT_vit = model_pyT_vit.to(device)
 
 
 '''
@@ -170,10 +202,15 @@ def train_model(model, m_name, lossFN, optimizer, num_epochs=10):
     train_loss = []
     train_acc = []
 
+    val_loss = []
+    val_acc = []
+    # Learning rate scheduler setup
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
+
     for epoch in range(num_epochs):
         
-        # for phase in ["train", "val"]:
-        for phase in ["train"]:
+        for phase in ["train", "val"]:
+        # for phase in ["train"]:
             if phase == "train":
                 model.train()
                 loader = trainLoader
@@ -203,10 +240,19 @@ def train_model(model, m_name, lossFN, optimizer, num_epochs=10):
             epoch_loss = running_loss / len(loader.dataset)
             epoch_acc = running_corrects.double() / len(loader.dataset)
 
-            train_loss.append(epoch_loss)
-            train_acc.append(epoch_acc.item())
+            if phase == "train":    
+                train_loss.append(epoch_loss)
+                train_acc.append(epoch_acc.item())
+                print(f"Epoch {epoch+1}/{num_epochs}: {phase.capitalize()} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}") # prints only train
 
-            print(f"Epoch {epoch+1}/{num_epochs}: {phase.capitalize()} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}")
+            if phase == "val": 
+                val_loss.append(epoch_loss)
+                val_acc.append(epoch_acc.item())
+
+                # Step the scheduler with validation loss
+                scheduler.step(epoch_loss)
+
+            # print(f"Epoch {epoch+1}/{num_epochs}: {phase.capitalize()} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}") # prints both train and val set
 
     time_elapsed = time.time() - since
     print(f"\nTraining complete in {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s")
@@ -214,20 +260,26 @@ def train_model(model, m_name, lossFN, optimizer, num_epochs=10):
     plt.figure(figsize=(12, 5))
 
     plt.subplot(1, 2, 1)
-    plt.plot(range(1, num_epochs+1), train_loss)
-    plt.title('Training Loss')
+    plt.plot(range(1, num_epochs+1), train_loss, color='blue', label="Train")
+    plt.plot(range(1, num_epochs+1), val_loss, color='green', label="TestVal")
+    plt.title('Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
+    plt.legend()
 
     plt.subplot(1, 2, 2)
-    plt.plot(range(1, num_epochs+1), train_acc, color='green')
-    plt.title('Training Accuracy')
+    plt.plot(range(1, num_epochs+1), train_acc, color='blue', label="Train")
+    plt.plot(range(1, num_epochs+1), val_acc, color='green', label="TestVal")
+    plt.title('Accuracy')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy')
+    plt.legend()
 
-    plt.suptitle(f"{m_name}", fontsize=12)
+    plt.suptitle(f"{m_name}, Training Time:{time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s", fontsize=12)
 
-    plt.savefig(f"./{checkpointPath}/{m_name}_{samples}samples_TrainingPlot")
+    if m_name == "Pretrained_ViT":
+        plt.savefig(f"./{checkpointPath}/{m_name}_{samples}samples_LR_{lr:.0e}_LayerTr{LayerTrStart}_{LayerTrEnd}_TrainingPlot")
+    else: plt.savefig(f"./{checkpointPath}/{m_name}_{samples}samples_LR_{lr:.0e}_TrainingPlot")
     plt.close()
 
     return train_loss, train_acc
@@ -265,7 +317,7 @@ def test_model(model, testLoader,m_name):
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
     plt.xlabel('Predicted Label')
     plt.ylabel('True Label')
-    plt.title(f'Confusion Matrix - Test Accuracy {accuracy}%')
+    plt.title(f'Confusion Matrix - Test Accuracy {accuracy:.2f}%')
     plt.tight_layout()
     plt.savefig(f"./{checkpointPath}/{m_name}_{samples}samples_confusion_matrix.png")
     plt.close()
@@ -277,7 +329,7 @@ Run the Models
 ## Run the Models
 
 Models = {
-    "CNN_only": model_RsN,
+    # "CNN_only": model_RsN,
     # "Fusion_CNN-ViT": model,
     # "ViT_only": model_vit,
     "Pretrained_ViT": model_pyT_vit
@@ -287,6 +339,8 @@ model_names = list(Models.keys()) # Get model names from dict
 
 # Define loss function
 lossFN = torch.nn.CrossEntropyLoss()
+lr = 0.001
+
 
 # Local for saving model
 checkpointPath = "ckpt" # File name
@@ -298,8 +352,12 @@ for name in model_names:
 
     print(name)
     print(f"Sample size: {samples}")
-    optimizer = torch.optim.Adam(Models[name].parameters(), lr=.0001) #.0001, .001, .3
-    train_loss, train_acc = train_model(Models[name], name, lossFN, optimizer, num_epochs=5)
+
+    if name == "Pretrained_ViT":
+        optimizer = torch.optim.AdamW(Models[name].parameters(), lr=lr, weight_decay=0.1) #Weight decay optimizer
+
+    else: optimizer = torch.optim.Adam(Models[name].parameters(), lr=lr) #.0001, .001, .3
+    train_loss, train_acc = train_model(Models[name], name, lossFN, optimizer, num_epochs=10)
     torch.save(Models[name].state_dict(), f"{checkpointPath}/{name}_{samples}samples.pth")
 
     test_model(Models[name], testLoader, name)
